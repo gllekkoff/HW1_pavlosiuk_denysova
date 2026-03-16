@@ -112,3 +112,60 @@ PER goes down steadily from CNN output (48%) all the way to layer 12 (15%). HuBE
 Without the transformer layers, the features only capture what's happening in a tiny local window. That's not enough to reliably tell phonemes apart - you need context from surrounding frames too.
 
 ---
+
+## Task 2 - Audio Filters
+
+### 1. Filtering Algorithms
+
+We wrote 5 audio filters and tested whether applying them before feature extraction helps. Each filter takes a raw audio array and returns a cleaned one of the same length.
+
+**Pre-emphasis**
+```
+y[t] = x[t] - 0.97 * x[t-1]
+```
+Boosts high frequencies by subtracting a scaled version of the previous sample. Makes consonants like `s`, `f`, `sh` sharper. A classic step in traditional speech processing pipelines.
+
+**Bandpass filter**
+
+Keeps only 80–7600 Hz using a Butterworth filter. Cuts low-frequency rumble (below 80 Hz) and the very top edge near Nyquist. Speech doesn't really exist outside this range anyway.
+
+**RMS normalize**
+
+Scales each utterance so all recordings have the same loudness. Some TIMIT speakers are recorded louder than others — this makes the amplitude consistent before the audio goes into the model.
+
+**Noise gate**
+
+Splits audio into 20ms frames and zeros out any frame whose energy is below –40 dB. Designed to silence background hiss in the pauses between words.
+
+**Spectral subtraction**
+
+Estimates background noise from the first 10 frames (assumed to be silence before speech starts), then subtracts that estimate from every frame. Audio is then reconstructed via inverse STFT. A noise reduction method from the 1970s.
+
+---
+
+### 2. Ablation Study
+
+We tested each filter independently using HuBERT-base (layer 12) with the same setup as Task 1.
+
+| Filter | PER | vs baseline |
+|---|---|---|
+| baseline (no filter) | 15.28% | — |
+| pre_emphasis | 15.28% | 0.00% |
+| bandpass | **15.21%** | −0.07% |
+| rms_normalize | 15.34% | +0.06% |
+| noise_gate | 54.95% | +39.67% |
+| spectral_subtraction | 15.62% | +0.34% |
+
+![Filter ablation](filter_ablation.png)
+
+Almost nothing helped. Four out of five filters stayed within ±0.4% of baseline — basically no difference. TIMIT is a clean studio dataset, so there is no noise to remove. Applying noise-removal filters to already-clean audio just slightly damages the signal.
+
+Bandpass was the only filter that gave any improvement (15.21%), and it's tiny. It cuts frequencies that have no speech information at all, so at least it doesn't make things worse.
+
+Pre-emphasis did nothing (15.28% = exactly baseline). HuBERT's CNN already applies its own learned frequency shaping during feature extraction, so doing pre-emphasis manually beforehand is just redundant.
+
+Noise gate completely broke the model — PER jumped to 54.95%. The –40 dB threshold zeroed out not just silence but also quiet speech frames. HuBERT was never trained on audio with sudden chunks of zeros in the middle of words, so the model got very confused.
+
+Spectral subtraction made things slightly worse (15.62%). Since the audio is already clean, it estimates the noise floor as nearly zero and then oversubtracts, creating small ringing artifacts that weren't there before.
+
+The overall takeaway is that traditional audio filters are designed for noisy recordings. On clean data like TIMIT they don't help. If we wanted to actually improve the model, a better approach would be adding noise to the training data, not removing noise that isn't there.
